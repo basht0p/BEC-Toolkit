@@ -22,7 +22,9 @@
         'Get-BECMailboxChanges',
         'Get-BECSentMailItems',
         'Get-BECSharingOperations',
-        'Invoke-BECInvestigation'
+        'Get-BECSignInLogs',
+        'Invoke-BECInvestigation',
+        'New-BECAuditLogSearch'
     )
     CmdletsToExport = @()
     VariablesToExport = @()
