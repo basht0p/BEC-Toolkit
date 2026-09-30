@@ -19,9 +19,13 @@ function Invoke-BECInvestigation {
     $investigation = [PSCustomObject]@{
         AccessedMail = Get-BECAccessedMailItems @search_parameters
         SentMail = Get-BECSentMailItems @search_parameters
+        DeletedMail = Get-BECDeletedMailItems @search_parameters
+        InboxRules = Get-BECInboxRules @search_parameters
+        MailboxChanges = Get-BECMailboxChanges @search_parameters
         SharingOperations = Get-BECSharingOperations @search_parameters
         FileOperations = Get-BECFileOperations @search_parameters
         Authentications = Get-BECAuthentications @search_parameters
+        IdentityChanges = Get-BECIdentityChanges @search_parameters
     }
 
     return $investigation

@@ -15,7 +15,11 @@
     FunctionsToExport = @(
         'Get-BECAccessedMailItems',
         'Get-BECAuthentications',
+        'Get-BECDeletedMailItems',
         'Get-BECFileOperations',
+        'Get-BECIdentityChanges',
+        'Get-BECInboxRules',
+        'Get-BECMailboxChanges',
         'Get-BECSentMailItems',
         'Get-BECSharingOperations',
         'Invoke-BECInvestigation'
