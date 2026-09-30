@@ -26,7 +26,7 @@ function Get-BECSentMailItems {
             MailboxOwnerUPN = $record.MailboxOwnerUPN
             SessionId = $record.SessionId
             # SendAs and SendOnBehalf record the mailbox the message appeared to come from
-            SentAsUser = if ($record.SendAsUserSmtp) { $record.SendAsUserSmtp } else { $record.SendOnBehalfOfUserSmtp }
+            SentAsUser = Select-BECFirstValue $record.SendAsUserSmtp $record.SendOnBehalfOfUserSmtp
             ItemId = $mail_item.Id
             ItemInternetMessageId = $mail_item.InternetMessageId
             ItemSizeInBytes = $mail_item.SizeInBytes

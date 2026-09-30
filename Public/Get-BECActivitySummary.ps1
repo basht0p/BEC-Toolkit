@@ -24,7 +24,7 @@ function Get-BECActivitySummary {
                     Time = ConvertTo-BECTimestamp $row.CreationTime
                     User = $row.UserId
                     IPAddress = ConvertTo-BECIPAddress $row.ClientIPAddress
-                    SessionId = if ($row.PSObject.Properties["SessionId"]) { $row.SessionId }
+                    SessionId = $row.PSObject.Properties["SessionId"].Value
                     Client = Select-BECFirstValue $row.PSObject.Properties["ClientInfoString"].Value $row.PSObject.Properties["UserAgent"].Value
                     Location = $location
                 }
