@@ -20,14 +20,27 @@ This module was created to ease the burden of crawling through clunky audit logs
 - `AuditLogsQuery.Read.All`
 
 
+## Selecting an Audit Log Search
+
+Every function reads from an existing, **succeeded** Purview audit log search:
+
+- `-AuditLogSearchName` selects a search by display name. If more than one search has that name, use `-AuditLogSearchId` instead.
+- `-AuditLogSearchId` selects a search by its ID.
+- With neither, the first succeeded search returned by Microsoft Graph is used, and its name is printed.
+
+Searches that are still running, failed, or cancelled are rejected. A warning is shown if the search hit its record count limit, which means the results are incomplete.
+
+
 ## Functions
 
 ### Get-BECAccessedMailItems
 
 Retrieves `MailItemsAccessed` events.
 
+Bind events (individual messages opened) produce one row per message. Sync events (a client downloaded a whole folder) produce one row per folder with the item columns empty; treat every item in that folder as accessed. The `MailAccessType` column tells the two apart.
+
 ```powershell
-Get-BECAccessedMailItems [-AuditLogSearchName <String>] [-ExportCsv]
+Get-BECAccessedMailItems [-AuditLogSearchName <String>] [-AuditLogSearchId <String>] [-ExportCsv]
 ```
 
 **Examples**
@@ -50,7 +63,7 @@ Get-BECAccessedMailItems -AuditLogSearchName "BEC-Incident-2025-05-28" -ExportCs
 Retrieves `Send` events.
 
 ```powershell
-Get-BECSentMailItems [-AuditLogSearchName <String>] [-ExportCsv]
+Get-BECSentMailItems [-AuditLogSearchName <String>] [-AuditLogSearchId <String>] [-ExportCsv]
 ```
 
 **Examples**
@@ -68,7 +81,7 @@ Get-BECSentMailItems -AuditLogSearchName "BEC-Incident-2025-05-28" -ExportCsv
 Retrieves file operations (`File*`).
 
 ```powershell
-Get-BECFileOperations [-AuditLogSearchName <String>] [-ExportCsv]
+Get-BECFileOperations [-AuditLogSearchName <String>] [-AuditLogSearchId <String>] [-ExportCsv]
 ```
 
 **Examples**
@@ -86,7 +99,7 @@ Get-BECFileOperations -AuditLogSearchName "BEC-Incident-2025-05-28" -ExportCsv
 Retrieves sharing-related operations.
 
 ```powershell
-Get-BECSharingOperations [-AuditLogSearchName <String>] [-ExportCsv]
+Get-BECSharingOperations [-AuditLogSearchName <String>] [-AuditLogSearchId <String>] [-ExportCsv]
 ```
 
 **Examples**
@@ -104,7 +117,7 @@ Get-BECSharingOperations -AuditLogSearchName "BEC-Incident-2025-05-28" -ExportCs
 Retrieves authentication events (`UserLoggedIn`, `UserLoginFailed`).
 
 ```powershell
-Get-BECAuthentications [-AuditLogSearchName <String>] [-ExportCsv]
+Get-BECAuthentications [-AuditLogSearchName <String>] [-AuditLogSearchId <String>] [-ExportCsv]
 ```
 
 **Examples**
@@ -122,7 +135,7 @@ Get-BECAuthentications -AuditLogSearchName "BEC-Incident-2025-05-28" -ExportCsv
 Runs the full BEC investigation (all functions) and exports results.
 
 ```powershell
-Invoke-BECInvestigation [-AuditLogSearchName <String>]
+Invoke-BECInvestigation [-AuditLogSearchName <String>] [-AuditLogSearchId <String>]
 ```
 
 **Examples**

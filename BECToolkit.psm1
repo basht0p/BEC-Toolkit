@@ -14,11 +14,11 @@ foreach ($module in $required_modules){
     }
 }
 
-function Get-BECAccessedMailItems {
+function Resolve-BECAuditLogSearch {
     [CmdletBinding()]
     param (
         [string]$AuditLogSearchName="undefined",
-        [switch]$ExportCsv
+        [string]$AuditLogSearchId
     )
 
     $required_scopes = "AuditLog.Read.All AuditLogsQuery.Read.All"
@@ -27,22 +27,83 @@ function Get-BECAccessedMailItems {
         Connect-MgGraph -Scopes $required_scopes -ErrorAction Stop -NoWelcome
     }
 
-    if ($AuditLogSearchName -eq "undefined") {
-        $audit_log_search = (Get-MgBetaSecurityAuditLogQuery | Where-Object Status -eq "succeeded")[0]
+    if ($AuditLogSearchId) {
+        $audit_log_search = Get-MgBetaSecurityAuditLogQuery -AuditLogQueryId $AuditLogSearchId -ErrorAction Stop
+    } elseif ($AuditLogSearchName -eq "undefined") {
+        $succeeded_searches = @(Get-MgBetaSecurityAuditLogQuery | Where-Object Status -eq "succeeded")
+        if ($succeeded_searches.Count -eq 0) {
+            throw "No succeeded audit log searches found. Create an audit log search and wait for it to complete, or pass -AuditLogSearchName."
+        }
+        $audit_log_search = $succeeded_searches[0]
+        Write-Host "Using audit log search '$($audit_log_search.DisplayName)' ($($audit_log_search.Id))" -ForegroundColor Gray
     } else {
-        $audit_log_search = Get-MgBetaSecurityAuditLogQuery | Where-Object DisplayName -eq $AuditLogSearchName
-        if ($null -eq $audit_log_search) {
+        $matching_searches = @(Get-MgBetaSecurityAuditLogQuery | Where-Object DisplayName -eq $AuditLogSearchName)
+        if ($matching_searches.Count -eq 0) {
             throw "No audit log search found with the name: $AuditLogSearchName"
         }
+        if ($matching_searches.Count -gt 1) {
+            $search_list = ($matching_searches | ForEach-Object { "$($_.Id) ($($_.Status))" }) -join ", "
+            throw "Multiple audit log searches found with the name: $AuditLogSearchName. Use -AuditLogSearchId with one of: $search_list"
+        }
+        $audit_log_search = $matching_searches[0]
     }
+
+    if ($audit_log_search.Status -ne "succeeded") {
+        throw "Audit log search '$($audit_log_search.DisplayName)' ($($audit_log_search.Id)) has status '$($audit_log_search.Status)'. Wait for it to succeed before investigating."
+    }
+
+    $limit_exceeded = $audit_log_search.IsRecordCountLimitExceeded
+    if ($null -eq $limit_exceeded -and $null -ne $audit_log_search.AdditionalProperties) {
+        $limit_exceeded = $audit_log_search.AdditionalProperties["isRecordCountLimitExceeded"]
+    }
+    if ($limit_exceeded -eq $true) {
+        Write-Warning "Audit log search '$($audit_log_search.DisplayName)' exceeded its record count limit. Results are incomplete; narrow the search (users, dates, operations) and run it again."
+    }
+
+    return $audit_log_search
+}
+
+function ConvertTo-BECPropertyTable {
+    param (
+        $Properties
+    )
+
+    $property_table = @{}
+
+    foreach ($property in @($Properties)) {
+        if ($null -ne $property -and $null -ne $property.Name) {
+            $property_table[$property.Name] = $property.Value
+        }
+    }
+
+    return $property_table
+}
+
+function Get-BECAccessedMailItems {
+    [CmdletBinding()]
+    param (
+        [string]$AuditLogSearchName="undefined",
+        [string]$AuditLogSearchId,
+        [switch]$ExportCsv
+    )
+
+    $audit_log_search = Resolve-BECAuditLogSearch -AuditLogSearchName $AuditLogSearchName -AuditLogSearchId $AuditLogSearchId
 
     $audit_log_records = Get-MgBetaSecurityAuditLogQueryRecord -AuditLogQueryId $audit_log_search.Id -All | Where-Object Operation -eq "MailItemsAccessed"
 
     $mail_items_accessed = @()
 
     foreach ($record in $audit_log_records.AuditData.AdditionalProperties) {
+        $operation_properties = ConvertTo-BECPropertyTable $record.OperationProperties
+
         foreach ($folder in $record.Folders) {
-            foreach ($folder_item in $folder.FolderItems) {
+            # Sync events are logged per folder with no FolderItems; keep them as folder-level rows
+            $folder_items = @($folder.FolderItems | Where-Object { $null -ne $_ })
+            if ($folder_items.Count -eq 0) {
+                $folder_items = @($null)
+            }
+
+            foreach ($folder_item in $folder_items) {
                 $mail_items_accessed += [PSCustomObject]@{
                     CreationTime = $record.CreationTime
                     ResultStatus = $record.ResultStatus
@@ -54,6 +115,8 @@ function Get-BECAccessedMailItems {
                     MailboxGuid = $record.MailboxGuid
                     MailboxOwnerUPN = $record.MailboxOwnerUPN
                     SessionId = $record.SessionId
+                    MailAccessType = $operation_properties["MailAccessType"]
+                    IsThrottled = $operation_properties["IsThrottled"]
                     FolderPath = $folder.Path
                     FolderId = $folder.Id
                     ItemSubject = $folder_item.Subject
@@ -77,7 +140,7 @@ function Get-BECAccessedMailItems {
         $export_full_path = Join-Path $export_folder_path $export_filename
 
         if ($mail_items_accessed.Count -gt 0) {
-            $mail_items_accessed | Export-Csv -Path $export_full_path
+            $mail_items_accessed | Export-Csv -Path $export_full_path -NoTypeInformation
             Write-Host "Exporting $($mail_items_accessed.Count) accessed mail item(s) to file below:" -BackgroundColor Black -ForegroundColor Yellow
             Write-Host "$export_full_path" -BackgroundColor Black -ForegroundColor Yellow
         } else {
@@ -92,23 +155,11 @@ function Get-BECSentMailItems {
     [CmdletBinding()]
     param (
         [string]$AuditLogSearchName="undefined",
+        [string]$AuditLogSearchId,
         [switch]$ExportCsv
     )
 
-    $required_scopes = "AuditLog.Read.All AuditLogsQuery.Read.All"
-
-    if($null -eq (Get-MgContext)) {
-        Connect-MgGraph -Scopes $required_scopes -ErrorAction Stop -NoWelcome
-    }
-
-    if ($AuditLogSearchName -eq "undefined") {
-        $audit_log_search = (Get-MgBetaSecurityAuditLogQuery | Where-Object Status -eq "succeeded")[0]
-    } else {
-        $audit_log_search = Get-MgBetaSecurityAuditLogQuery | Where-Object DisplayName -eq $AuditLogSearchName
-        if ($null -eq $audit_log_search) {
-            throw "No audit log search found with the name: $AuditLogSearchName"
-        }
-    }
+    $audit_log_search = Resolve-BECAuditLogSearch -AuditLogSearchName $AuditLogSearchName -AuditLogSearchId $AuditLogSearchId
 
     $audit_log_records = Get-MgBetaSecurityAuditLogQueryRecord -AuditLogQueryId $audit_log_search.Id -All | Where-Object Operation -eq "Send"
 
@@ -146,7 +197,7 @@ function Get-BECSentMailItems {
         $export_full_path = Join-Path $export_folder_path $export_filename
 
         if ($mail_items_sent.Count -gt 0) {
-            $mail_items_sent | Export-Csv -Path $export_full_path
+            $mail_items_sent | Export-Csv -Path $export_full_path -NoTypeInformation
             Write-Host "Exporting $($mail_items_sent.Count) sent mail item(s) to file below:" -BackgroundColor Black -ForegroundColor Yellow
             Write-Host "$export_full_path" -BackgroundColor Black -ForegroundColor Yellow
         } else {
@@ -161,23 +212,11 @@ function Get-BECFileOperations {
     [CmdletBinding()]
     param (
         [string]$AuditLogSearchName="undefined",
+        [string]$AuditLogSearchId,
         [switch]$ExportCsv
     )
 
-    $required_scopes = "AuditLog.Read.All AuditLogsQuery.Read.All"
-
-    if($null -eq (Get-MgContext)) {
-        Connect-MgGraph -Scopes $required_scopes -ErrorAction Stop -NoWelcome
-    }
-
-    if ($AuditLogSearchName -eq "undefined") {
-        $audit_log_search = (Get-MgBetaSecurityAuditLogQuery | Where-Object Status -eq "succeeded")[0]
-    } else {
-        $audit_log_search = Get-MgBetaSecurityAuditLogQuery | Where-Object DisplayName -eq $AuditLogSearchName
-        if ($null -eq $audit_log_search) {
-            throw "No audit log search found with the name: $AuditLogSearchName"
-        }
-    }
+    $audit_log_search = Resolve-BECAuditLogSearch -AuditLogSearchName $AuditLogSearchName -AuditLogSearchId $AuditLogSearchId
 
     $audit_log_records = Get-MgBetaSecurityAuditLogQueryRecord -AuditLogQueryId $audit_log_search.Id -All | Where-Object Operation -like "File*"
 
@@ -215,7 +254,7 @@ function Get-BECFileOperations {
         $export_full_path = Join-Path $export_folder_path $export_filename
 
         if ($file_operations.Count -gt 0) {
-            $file_operations | Export-Csv -Path $export_full_path
+            $file_operations | Export-Csv -Path $export_full_path -NoTypeInformation
             Write-Host "Exporting $($file_operations.Count) file operation(s) to file below:" -BackgroundColor Black -ForegroundColor Yellow
             Write-Host "$export_full_path" -BackgroundColor Black -ForegroundColor Yellow
         } else {
@@ -230,23 +269,11 @@ function Get-BECSharingOperations {
     [CmdletBinding()]
     param (
         [string]$AuditLogSearchName="undefined",
+        [string]$AuditLogSearchId,
         [switch]$ExportCsv
     )
 
-    $required_scopes = "AuditLog.Read.All AuditLogsQuery.Read.All"
-
-    if($null -eq (Get-MgContext)) {
-        Connect-MgGraph -Scopes $required_scopes -ErrorAction Stop -NoWelcome
-    }
-
-    if ($AuditLogSearchName -eq "undefined") {
-        $audit_log_search = (Get-MgBetaSecurityAuditLogQuery | Where-Object Status -eq "succeeded")[0]
-    } else {
-        $audit_log_search = Get-MgBetaSecurityAuditLogQuery | Where-Object DisplayName -eq $AuditLogSearchName
-        if ($null -eq $audit_log_search) {
-            throw "No audit log search found with the name: $AuditLogSearchName"
-        }
-    }
+    $audit_log_search = Resolve-BECAuditLogSearch -AuditLogSearchName $AuditLogSearchName -AuditLogSearchId $AuditLogSearchId
 
     $valid_sharing_operations = @(
         "SharingSet",
@@ -296,7 +323,7 @@ function Get-BECSharingOperations {
         $export_full_path = Join-Path $export_folder_path $export_filename
 
         if ($sharing_operations.Count -gt 0) {
-            $sharing_operations | Export-Csv -Path $export_full_path
+            $sharing_operations | Export-Csv -Path $export_full_path -NoTypeInformation
             Write-Host "Exporting $($sharing_operations.Count) sharing operation(s) to file below:" -BackgroundColor Black -ForegroundColor Yellow
             Write-Host "$export_full_path" -BackgroundColor Black -ForegroundColor Yellow
         } else {
@@ -311,23 +338,11 @@ function Get-BECAuthentications {
     [CmdletBinding()]
     param (
         [string]$AuditLogSearchName="undefined",
+        [string]$AuditLogSearchId,
         [switch]$ExportCsv
     )
 
-    $required_scopes = "AuditLog.Read.All AuditLogsQuery.Read.All"
-
-    if($null -eq (Get-MgContext)) {
-        Connect-MgGraph -Scopes $required_scopes -ErrorAction Stop -NoWelcome
-    }
-
-    if ($AuditLogSearchName -eq "undefined") {
-        $audit_log_search = (Get-MgBetaSecurityAuditLogQuery | Where-Object Status -eq "succeeded")[0]
-    } else {
-        $audit_log_search = Get-MgBetaSecurityAuditLogQuery | Where-Object DisplayName -eq $AuditLogSearchName
-        if ($null -eq $audit_log_search) {
-            throw "No audit log search found with the name: $AuditLogSearchName"
-        }
-    }
+    $audit_log_search = Resolve-BECAuditLogSearch -AuditLogSearchName $AuditLogSearchName -AuditLogSearchId $AuditLogSearchId
 
     $valid_authentication_operations = @(
         "UserLoggedIn",
@@ -339,6 +354,8 @@ function Get-BECAuthentications {
     $authentications = @()
 
     foreach ($record in $audit_log_records.AuditData.AdditionalProperties) {
+        $extended_properties = ConvertTo-BECPropertyTable $record.ExtendedProperties
+        $device_properties = ConvertTo-BECPropertyTable $record.DeviceProperties
 
         $authentications += [PSCustomObject]@{
             CreationTime = $record.CreationTime
@@ -351,12 +368,12 @@ function Get-BECAuthentications {
             ErrorNumber = $record.ErrorNumber
             LogonError = $record.LogonError
             ApplicationId = $record.ApplicationId
-            UserAgent = $record.ExtendedProperties.Value[$record.ExtendedProperties.Name.IndexOf("UserAgent")]
-            OS = $record.DeviceProperties.Value[$record.DeviceProperties.Name.IndexOf("OS")]
-            BrowserType = $record.DeviceProperties.Value[$record.DeviceProperties.Name.IndexOf("BrowserType")]
-            IsCompliant = $record.DeviceProperties.Value[$record.DeviceProperties.Name.IndexOf("IsCompliant")]
-            IsCompliantAndManaged = $record.DeviceProperties.Value[$record.DeviceProperties.Name.IndexOf("IsCompliantAndManaged")]
-            SessionId = $record.DeviceProperties.Value[$record.DeviceProperties.Name.IndexOf("SessionId")]
+            UserAgent = $extended_properties["UserAgent"]
+            OS = $device_properties["OS"]
+            BrowserType = $device_properties["BrowserType"]
+            IsCompliant = $device_properties["IsCompliant"]
+            IsCompliantAndManaged = $device_properties["IsCompliantAndManaged"]
+            SessionId = $device_properties["SessionId"]
         }
     }
 
@@ -371,7 +388,7 @@ function Get-BECAuthentications {
         $export_full_path = Join-Path $export_folder_path $export_filename
 
         if ($authentications.Count -gt 0) {
-            $authentications | Export-Csv -Path $export_full_path
+            $authentications | Export-Csv -Path $export_full_path -NoTypeInformation
             Write-Host "Exporting $($authentications.Count) authentication(s) to file below:" -BackgroundColor Black -ForegroundColor Yellow
             Write-Host "$export_full_path" -BackgroundColor Black -ForegroundColor Yellow
         } else {
@@ -385,16 +402,20 @@ function Get-BECAuthentications {
 function Invoke-BECInvestigation {
     [CmdletBinding()]
     param (
-        [string]$AuditLogSearchName="undefined"
+        [string]$AuditLogSearchName="undefined",
+        [string]$AuditLogSearchId
     )
 
     Write-Host "Running full BEC investigation. This may take a moment..."
 
-    $accessed_mail = Get-BECAccessedMailItems -AuditLogSearchName $AuditLogSearchName -ExportCsv
-    $sent_mail = Get-BECSentMailItems -AuditLogSearchName $AuditLogSearchName -ExportCsv
-    $sharing_operations = Get-BECSharingOperations -AuditLogSearchName $AuditLogSearchName -ExportCsv
-    $file_operations = Get-BECFileOperations -AuditLogSearchName $AuditLogSearchName -ExportCsv
-    $authentications = Get-BECAuthentications -AuditLogSearchName $AuditLogSearchName -ExportCsv
+    # Resolve once so every export comes from the same audit log search
+    $AuditLogSearchId = (Resolve-BECAuditLogSearch -AuditLogSearchName $AuditLogSearchName -AuditLogSearchId $AuditLogSearchId).Id
+
+    $accessed_mail = Get-BECAccessedMailItems -AuditLogSearchId $AuditLogSearchId -ExportCsv
+    $sent_mail = Get-BECSentMailItems -AuditLogSearchId $AuditLogSearchId -ExportCsv
+    $sharing_operations = Get-BECSharingOperations -AuditLogSearchId $AuditLogSearchId -ExportCsv
+    $file_operations = Get-BECFileOperations -AuditLogSearchId $AuditLogSearchId -ExportCsv
+    $authentications = Get-BECAuthentications -AuditLogSearchId $AuditLogSearchId -ExportCsv
 
     $investigation = [PSCustomObject]@{
         AccessedMail = $accessed_mail
@@ -406,3 +427,5 @@ function Invoke-BECInvestigation {
 
     return $investigation
 }
+
+Export-ModuleMember -Function Get-BECAccessedMailItems, Get-BECSentMailItems, Get-BECFileOperations, Get-BECSharingOperations, Get-BECAuthentications, Invoke-BECInvestigation
