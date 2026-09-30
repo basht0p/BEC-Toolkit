@@ -13,7 +13,9 @@
     )
 
     FunctionsToExport = @(
+        'Export-BECRawAuditLog',
         'Get-BECAccessedMailItems',
+        'Get-BECActivitySummary',
         'Get-BECAuthentications',
         'Get-BECDeletedMailItems',
         'Get-BECFileOperations',
